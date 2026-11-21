@@ -1,0 +1,1 @@
+"""Structured tools and permissions."""
