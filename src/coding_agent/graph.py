@@ -199,11 +199,91 @@ def tool_execution_node(state: AgentState) -> dict[str, Any]:
 
         tool_messages.append(ToolMessage(content=res_str, tool_call_id=call_id))
 
+    # Check if any file was modified to trigger deterministic verification
+    had_edits = any(tc["name"] == "apply_search_replace" for tc in last_msg.tool_calls)
+
     return {
         "messages": tool_messages,
         "working_memory": working_memory,
         "pending_approval": None,
+        "last_command_output": "had_edits" if had_edits else None,
     }
+
+
+def verify_node(state: AgentState) -> dict[str, Any]:
+    """Deterministic Verification Hook (Step 3.2): Run linter/tests after code edits."""
+    workspace = Path(state.get("workspace_root") or config.workspace_root)
+    retries = state.get("verification_retries", 0)
+
+    # Execute ruff check across workspace in sandbox
+    res_str = run_command.invoke({"command": "ruff check ."})
+
+    # Check if ruff found errors or exit code != 0
+    failed = ("error:" in res_str.lower() or "syntax" in res_str.lower() or "failed" in res_str.lower()) and "0 errors" not in res_str
+
+    working_memory = state.get("working_memory")
+    if isinstance(working_memory, dict):
+        working_memory = WorkingMemory(**working_memory)
+    elif working_memory is None:
+        working_memory = WorkingMemory()
+
+    if failed:
+        working_memory.last_verification_error = res_str[:400]
+        notice = (
+            f"[Deterministic Verification Failed (Attempt {retries + 1}/3)]\n"
+            f"Linter output:\n```\n{res_str[:400]}\n```"
+        )
+        return {
+            "messages": [AIMessage(content=notice)],
+            "working_memory": working_memory,
+            "verification_retries": retries + 1,
+            "last_verification_passed": False,
+        }
+    else:
+        working_memory.last_verification_error = None
+        notice = "[Deterministic Verification Passed]: Workspace code passes ruff check cleanly."
+        return {
+            "messages": [AIMessage(content=notice)],
+            "working_memory": working_memory,
+            "verification_retries": 0,
+            "last_verification_passed": True,
+        }
+
+
+def fixer_node(state: AgentState) -> dict[str, Any]:
+    """Auto-fixer node: prompts model to correct syntax/lint error directly."""
+    last_err = state.get("working_memory", WorkingMemory()).last_verification_error or "Unknown syntax error"
+    prompt = (
+        f"The previous modification introduced linter/syntax errors:\n```\n{last_err}\n```\n"
+        f"Please inspect the affected file and use apply_search_replace to fix the error immediately."
+    )
+    fix_msg = HumanMessage(content=prompt)
+    model = get_model()
+    resp = model.invoke([*state["messages"], fix_msg])
+    return {
+        "messages": [fix_msg, resp],
+        "step_count": state.get("step_count", 0) + 1,
+    }
+
+
+def route_after_tool(state: AgentState) -> Literal["verify_node", "agent_model"]:
+    """If file edits were performed, route to deterministic verification; otherwise return to agent."""
+    if state.get("last_command_output") == "had_edits":
+        return "verify_node"
+    return "agent_model"
+
+
+def route_after_verify(state: AgentState) -> Literal["fixer_node", "agent_model", "__end__"]:
+    """Route after deterministic verification check."""
+    passed = state.get("last_verification_passed", True)
+    retries = state.get("verification_retries", 0)
+
+    if not passed:
+        if retries <= 3:
+            return "fixer_node"
+        # Escalated after 3 failed retries
+        return END
+    return "agent_model"
 
 
 def route_after_model(state: AgentState) -> Literal["approval_gate", "tool_executor", "__end__"]:
@@ -227,13 +307,15 @@ def route_after_model(state: AgentState) -> Literal["approval_gate", "tool_execu
 
 
 def build_agent_graph(checkpointer=None):
-    """Construct and compile the LangGraph state machine with persistent checkpointer."""
+    """Construct and compile the LangGraph state machine with persistent checkpointer and verification hook."""
     workflow = StateGraph(AgentState)
 
     workflow.add_node("bootstrap_context", bootstrap_context_node)
     workflow.add_node("agent_model", agent_model_node)
     workflow.add_node("approval_gate", approval_gate_node)
     workflow.add_node("tool_executor", tool_execution_node)
+    workflow.add_node("verify_node", verify_node)
+    workflow.add_node("fixer_node", fixer_node)
 
     workflow.add_edge(START, "bootstrap_context")
     workflow.add_edge("bootstrap_context", "agent_model")
@@ -249,7 +331,30 @@ def build_agent_graph(checkpointer=None):
     )
 
     workflow.add_edge("approval_gate", "tool_executor")
-    workflow.add_edge("tool_executor", "agent_model")
+
+    # Verification hook after tool execution
+    workflow.add_conditional_edges(
+        "tool_executor",
+        route_after_tool,
+        {
+            "verify_node": "verify_node",
+            "agent_model": "agent_model",
+        },
+    )
+
+    # Route after verification
+    workflow.add_conditional_edges(
+        "verify_node",
+        route_after_verify,
+        {
+            "fixer_node": "fixer_node",
+            "agent_model": "agent_model",
+            END: END,
+        },
+    )
+
+    # Route fixer edits back to execution
+    workflow.add_edge("fixer_node", "tool_executor")
 
     active_checkpointer = checkpointer if checkpointer is not None else get_checkpointer()
     return workflow.compile(checkpointer=active_checkpointer)

@@ -26,3 +26,5 @@ class AgentState(TypedDict):
     max_steps: int
     pending_approval: dict[str, Any] | None
     last_command_output: str | None
+    verification_retries: int
+    last_verification_passed: bool | None
