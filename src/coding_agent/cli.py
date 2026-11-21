@@ -9,11 +9,13 @@ from coding_agent.state import WorkingMemory
 
 
 def print_banner():
+    checkpointer_type = "PostgresSaver (Durable)" if config.use_postgres_checkpointer else "MemorySaver (Volatile)"
     print("=" * 65)
-    print("  AUTONOMOUS CODING AGENT PLATFORM (PHASE 1 - ACI LOOP) ")
+    print("  AUTONOMOUS CODING AGENT PLATFORM (PHASE 2 - DUAL MEMORY & SUBAGENTS) ")
     print(f"  Model: {config.model_name} | Provider: {config.model_provider}")
     print(f"  Workspace: {config.workspace_root}")
     print(f"  Approval Mode: {config.approval_mode}")
+    print(f"  Checkpointer: {checkpointer_type}")
     print("=" * 65)
 
 
@@ -23,18 +25,16 @@ def run_cli():
     thread_id = "cli-session-1"
     graph_config = {"configurable": {"thread_id": thread_id}}
 
-    working_memory = WorkingMemory()
-    initial_state = {
-        "messages": [],
-        "workspace_root": str(config.workspace_root),
-        "repo_snapshot": "",
-        "approval_mode": config.approval_mode,
-        "working_memory": working_memory,
-        "step_count": 0,
-        "max_steps": config.max_steps,
-        "pending_approval": None,
-        "last_command_output": None,
-    }
+    # Check for existing persisted state
+    existing_state = agent.get_state(graph_config)
+    if existing_state and existing_state.values:
+        working_mem = existing_state.values.get("working_memory")
+        modified = getattr(working_mem, "files_modified", []) if working_mem else []
+        print(f"\033[1;32m[Session Resumed]\033[0m Restored state for '{thread_id}'.")
+        if modified:
+            print(f"  Previously modified files: {', '.join(modified)}")
+    else:
+        working_mem = WorkingMemory()
 
     while True:
         try:

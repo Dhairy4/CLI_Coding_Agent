@@ -49,10 +49,22 @@ class AgentConfig(BaseSettings):
     max_steps: int = 25
     max_file_lines_read: int = 250
     max_output_lines: int = 100
+    token_budget: int = 8000
+    compaction_threshold: float = 0.75
 
     # Permissions and Approval Mode: "ask" | "auto" | "never"
     approval_mode: Literal["ask", "auto", "never"] = Field(
         default_factory=lambda: os.getenv("AGENT_APPROVAL_MODE", "ask")
+    )
+
+    # Checkpointer & Persistence (PostgreSQL)
+    postgres_uri: str = Field(
+        default_factory=lambda: os.getenv(
+            "POSTGRES_URI", "postgresql://dhairya:dhairya@localhost:5432/postgres"
+        )
+    )
+    use_postgres_checkpointer: bool = Field(
+        default_factory=lambda: os.getenv("USE_POSTGRES_CHECKPOINTER", "true").lower() == "true"
     )
 
     # Docker Sandbox Settings

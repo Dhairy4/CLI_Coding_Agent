@@ -11,11 +11,17 @@ dependencies = [
     "langchain-ollama>=0.2.0",
     "langchain-openai>=0.2.0",
     "langgraph>=0.2.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary,pool]>=3.2.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.0.0",
     "pytest>=8.0.0",
     "qdrant-client>=1.9.0",
     "ruff>=0.4.0",
+    "tiktoken>=0.7.0",
     "tree-sitter>=0.22.0",
     "tree-sitter-python>=0.21.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

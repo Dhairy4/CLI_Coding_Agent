@@ -15,6 +15,7 @@ Available Tools:
 - read_file_lines(path, start_line, line_count): Read a slice of a file.
 - grep_search(query, path_pattern, case_sensitive): Search for regex/strings across workspace files.
 - search_symbols(query, limit): Semantic search for Python classes, functions, and imports in AST index.
+- delegate_to_explorer(research_query): Delegate large searches or multi-file investigation to a bounded read-only subagent to preserve main context budget.
 - apply_search_replace(path, old_str, new_str): Replace an EXACT unique block of code.
 - run_command(command): Run a bash command inside the sandbox (pytest, ruff, git diff, etc.).
 
